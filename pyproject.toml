@@ -1,0 +1,70 @@
+[project]
+name = "pgque"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Jannchie", email = "jannchie@gmail.com" }]
+requires-python = ">=3.12"
+dependencies = ["sqlalchemy>=2.0.41"]
+
+[project.optional-dependencies]
+async = ["asyncpg>=0.29.0"]
+psycopg2 = ["psycopg2-binary>=2.9.9"]
+psycopg3 = ["psycopg[binary]>=3.2.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest-cov>=6.2.1", "ruff>=0.12.1"]
+
+
+[tool.ruff]
+line-length = 200
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "PGH",
+    "RUF002",
+    "RUF003",
+    "BLE001",
+    "ERA001",
+    "FIX002",
+    "TD002",
+    "TD003",
+    "D",
+    "PLR2004",
+    "INP001",
+    "N812",
+    "FBT003",
+    "S311",
+    "ANN201",
+    "RUF012",
+    "T201",
+    "PT009",
+    "ANN204",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/pgque/__init__.py" = ["SLF001"]
+"**/tests/**/*" = [
+    "A002",
+    "S101",
+    "SLF001",
+    "PLC0415",
+    "PERF401",
+    "ANN001",
+    "ANN002",
+    "ANN003",
+    "ARG005",
+]
+
+[tool.uv]
+upgrade = true
+package = true
+
+[tool.coverage.run]
+source = ["src"]
+branch = true

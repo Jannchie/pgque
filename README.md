@@ -24,30 +24,40 @@ pip install pgque[psycopg2]
 
 ## Usage
 
-First, you need to create the message table in your database. You can optionally specify a custom table name.
+### Creating Tables
+
+To create the message table in your database, instantiate `MessageQueue` or `AsyncMessageQueue` and call `create_table()`.
+You can optionally specify a custom table name.
 
 ```python
-from pgque import create_tables
+import asyncio
+from pgque import MessageQueue, AsyncMessageQueue
 
 database_url = "postgresql://user:password@host:port/dbname"
 
-# Create a table with the default name "messages"
-create_tables(database_url)
+# Synchronous: Create a table with the default name "messages"
+# Pass create_table=True to the constructor
+queue = MessageQueue(database_url, create_table=True)
 
-# Or, create a table with a custom name
-create_tables(database_url, table_name="my_messages")
+# Asynchronous: Create a table with a custom name
+async def create_async_table():
+    async_queue = AsyncMessageQueue(database_url, table_name="my_messages")
+    await async_queue.create_table()
+    await async_queue.close()
+
+asyncio.run(create_async_table())
 ```
 
-### Synchronous
+### Synchronous Usage
 
 ```python
-from pgque import get_sync_queue
+from pgque import MessageQueue
 
 # Connect to a queue with the default table name
-queue = get_sync_queue("postgresql+psycopg://user:password@host:port/dbname")
+queue = MessageQueue("postgresql+psycopg://user:password@host:port/dbname")
 
 # Connect to a queue with a custom table name
-custom_queue = get_sync_queue(
+custom_queue = MessageQueue(
     "postgresql+psycopg://user:password@host:port/dbname",
     table_name="my_messages",
 )
@@ -62,15 +72,15 @@ if message:
     custom_queue.complete_message(message["id"])
 ```
 
-### Asynchronous
+### Asynchronous Usage
 
 ```python
 import asyncio
-from pgque import get_async_queue
+from pgque import AsyncMessageQueue
 
 async def main():
     # Connect to a queue with a custom table name
-    queue = get_async_queue(
+    queue = AsyncMessageQueue(
         "postgresql+asyncpg://user:password@host:port/dbname",
         table_name="my_messages",
     )

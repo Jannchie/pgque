@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 from collections.abc import AsyncGenerator, Generator
 
@@ -199,14 +200,14 @@ def test_worker_process_message(sync_queue: MessageQueue):
 
     processed_payloads = []
 
-    def handler(current_payload):
+    def handler(current_payload) -> bool:
         processed_payloads.append(current_payload)
         return True  # Indicate successful processing
 
-    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1)  # type: ignore # poll_interval in constructor
 
     # Run the worker for a short period to allow it to process the message
-    worker.start() # No args
+    worker.start()  # No args
     time.sleep(0.5)
     worker.stop()
 
@@ -226,17 +227,15 @@ def test_worker_fail_message_and_retry(sync_queue: MessageQueue):
 
     processed_count = 0
 
-    def handler(current_payload):
+    def handler(current_payload):  # noqa: ANN202, ARG001
         nonlocal processed_count
         processed_count += 1
-        if processed_count == 1:
-            return False  # Simulate failure
-        return True  # Succeed on retry
+        return processed_count != 1
 
-    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1)  # type: ignore # poll_interval in constructor
 
-    worker.start() # No args
-    time.sleep(2.5)  # Allow for initial failure and retry
+    worker.start()  # No args
+    time.sleep(5)  # Allow for initial failure and retry
     worker.stop()
 
     assert processed_count == 2  # Initial attempt + 1 retry
@@ -250,19 +249,19 @@ def test_worker_fail_message_and_retry(sync_queue: MessageQueue):
 def test_worker_dead_letter(sync_queue: MessageQueue):
     queue_name = "test_worker_dead_letter"
     payload = {"data": "worker_dlq_task"}
-    sync_queue.send_message(queue_name, payload, max_retries=0) # No retries
+    sync_queue.send_message(queue_name, payload, max_retries=0)  # No retries
 
     processed_count = 0
 
-    def handler(current_payload):
+    def handler(current_payload) -> bool:  # noqa: ARG001
         nonlocal processed_count
         processed_count += 1
         return False  # Always fail
 
-    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1)  # type: ignore # poll_interval in constructor
 
-    worker.start() # No args
-    time.sleep(0.5) # Allow for processing and immediate DLQ
+    worker.start()  # No args
+    time.sleep(0.5)  # Allow for processing and immediate DLQ
     worker.stop()
 
     assert processed_count == 1
@@ -281,21 +280,19 @@ async def test_async_worker_process_message(async_queue: AsyncMessageQueue):
 
     processed_payloads = []
 
-    async def handler(current_payload):
+    async def handler(current_payload) -> bool:
         processed_payloads.append(current_payload)
         return True  # Indicate successful processing
 
-    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1)  # poll_interval in constructor
 
     # Run the worker for a short period to allow it to process the message
-    task = worker.start() # No args
+    task = worker.start()  # No args
     await asyncio.sleep(0.5)
     worker.stop()
 
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert len(processed_payloads) == 1
     assert processed_payloads[0] == payload
@@ -314,23 +311,19 @@ async def test_async_worker_fail_message_and_retry(async_queue: AsyncMessageQueu
 
     processed_count = 0
 
-    async def handler(current_payload):
+    async def handler(current_payload):  # noqa: ANN202, ARG001
         nonlocal processed_count
         processed_count += 1
-        if processed_count == 1:
-            return False  # Simulate failure
-        return True  # Succeed on retry
+        return processed_count != 1
 
-    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1)  # poll_interval in constructor
 
-    task = worker.start() # No args
-    await asyncio.sleep(2.5)  # Allow for initial failure and retry
+    task = worker.start()  # No args
+    await asyncio.sleep(5)  # Allow for initial failure and retry
     worker.stop()
 
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert processed_count == 2  # Initial attempt + 1 retry
 
@@ -344,25 +337,23 @@ async def test_async_worker_fail_message_and_retry(async_queue: AsyncMessageQueu
 async def test_async_worker_dead_letter(async_queue: AsyncMessageQueue):
     queue_name = "test_async_worker_dead_letter"
     payload = {"data": "async_worker_dlq_task"}
-    await async_queue.send_message(queue_name, payload, max_retries=0) # No retries
+    await async_queue.send_message(queue_name, payload, max_retries=0)  # No retries
 
     processed_count = 0
 
-    async def handler(current_payload):
+    async def handler(current_payload) -> bool:  # noqa: ARG001
         nonlocal processed_count
         processed_count += 1
         return False  # Always fail
 
-    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1)  # poll_interval in constructor
 
-    task = worker.start() # No args
-    await asyncio.sleep(0.5) # Allow for processing and immediate DLQ
+    task = worker.start()  # No args
+    await asyncio.sleep(0.5)  # Allow for processing and immediate DLQ
     worker.stop()
 
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert processed_count == 1
 

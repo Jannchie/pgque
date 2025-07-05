@@ -1,20 +1,22 @@
 import asyncio
 import time
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
 from conftest import ASYNC_DATABASE_URL, SYNC_DATABASE_URL, TEST_TABLE_NAME
+from sqlalchemy import delete
 
 from pgque import AsyncMessageQueue, MessageQueue
 
 
 async def async_cleanup_sync_queue(queue: MessageQueue):
     async with queue._async_queue.get_session() as session:
-        await session.execute(queue._async_queue.Message.__table__.delete())
+        await session.execute(delete(queue._async_queue.Message))
 
 
 @pytest.fixture
-def sync_queue() -> MessageQueue:
+def sync_queue() -> Generator[MessageQueue, None, None]:
     """
     Provides a synchronous queue for testing,
     and cleans up the data after the test is completed.
@@ -25,7 +27,7 @@ def sync_queue() -> MessageQueue:
 
 
 @pytest_asyncio.fixture
-async def async_queue() -> AsyncMessageQueue:
+async def async_queue() -> AsyncGenerator[AsyncMessageQueue, None]:
     """
     Provides an asynchronous queue for testing,
     and cleans up the data after the test is completed.
@@ -34,7 +36,7 @@ async def async_queue() -> AsyncMessageQueue:
     await queue.create_table()
     yield queue
     async with queue.get_session() as session:
-        await session.execute(queue.Message.__table__.delete())  # type: ignore
+        await session.execute(delete(queue.Message))
     await queue.close()
 
 

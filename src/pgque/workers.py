@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -17,24 +18,57 @@ class MessageWorker:
         queue: MessageQueue,
         queue_name: str,
         handler: Callable[[dict[str, Any]], None],
+        poll_interval: float = 1, # Added poll_interval
+        max_messages_per_batch: int = 1, # Added max_messages_per_batch
     ):
         self.queue = queue
         self.queue_name = queue_name
         self.handler = handler
         self.running = False
-        self._async_worker = AsyncMessageWorker(queue._async_queue, queue_name, handler)  # noqa: SLF001
+        self.poll_interval = poll_interval # Store poll_interval
+        self.max_messages_per_batch = max_messages_per_batch # Store max_messages_per_batch
+        self._async_worker = AsyncMessageWorker(
+            queue._async_queue,
+            queue_name,
+            handler,
+            poll_interval=poll_interval, # Pass to async worker
+            max_messages_per_batch=max_messages_per_batch, # Pass to async worker
+        )
+        self._thread = None
+        self._loop = None
+        self._task = None
 
-    def start(self, poll_interval: int = 1, max_messages_per_batch: int = 1):
+    def start(self): # Removed poll_interval and max_messages_per_batch from here
         """Start the synchronous worker"""
         self.running = True
+        self._async_worker.running = True  # Ensure async worker is also set to running
         logger.debug("Starting synchronous worker for queue %s", self.queue_name)
-        asyncio.run(self._async_worker.start(poll_interval, max_messages_per_batch))
+
+        def run_in_thread():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._task = self._loop.create_task(self._async_worker._run())
+                self._loop.run_until_complete(self._task)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._loop.close()
+
+        self._thread = threading.Thread(target=run_in_thread, daemon=True)
+        self._thread.start()
 
     def stop(self):
         """Stop the worker"""
         self.running = False
         logger.debug("Stopping synchronous worker for queue %s", self.queue_name)
         self._async_worker.stop()
+
+        if self._task and self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._task.cancel)
+
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
 
 
 class AsyncMessageWorker:
@@ -45,31 +79,45 @@ class AsyncMessageWorker:
         queue: AsyncMessageQueue,
         queue_name: str,
         handler: Callable[[dict[str, Any]], Any],
+        poll_interval: float = 1, # Added poll_interval
+        max_messages_per_batch: int = 1, # Added max_messages_per_batch
     ):
         self.queue = queue
         self.queue_name = queue_name
         self.handler = handler
         self.running = False
+        self.poll_interval = poll_interval # Store poll_interval
+        self.max_messages_per_batch = max_messages_per_batch # Store max_messages_per_batch
+        self._task = None
 
-    async def start(self, poll_interval: float = 1, max_messages_per_batch: int = 1):
+    def start(self): # Removed poll_interval and max_messages_per_batch from here
         """Start the asynchronous worker"""
         self.running = True
         logger.debug("Starting asynchronous worker for queue %s", self.queue_name)
+        self._task = asyncio.create_task(self._run())
+        return self._task
 
+    async def _run(self):
+        """Internal run method"""
         while self.running:
             try:
                 processed_count = 0
 
-                for _ in range(max_messages_per_batch):
+                for _ in range(self.max_messages_per_batch): # Use self.max_messages_per_batch
+                    if not self.running: # Check running flag before receiving
+                        break
                     message = await self.queue.receive_message(self.queue_name)
                     if message:
                         try:
                             if asyncio.iscoroutinefunction(self.handler):
-                                await self.handler(message["payload"])
+                                result = await self.handler(message["payload"])
                             else:
-                                self.handler(message["payload"])
+                                result = self.handler(message["payload"])
 
-                            await self.queue.complete_message(message["id"])
+                            if result is False:
+                                await self.queue.fail_message(message["id"], "Handler returned False")
+                            else:
+                                await self.queue.complete_message(message["id"])
                             processed_count += 1
                         except Exception as e:
                             error_msg = f"Handler error: {e!s}"
@@ -79,14 +127,25 @@ class AsyncMessageWorker:
                     else:
                         break
 
-                if processed_count == 0:
-                    await asyncio.sleep(poll_interval)
+                if processed_count == 0 and self.running: # Only sleep if no messages processed and still running
+                    try:
+                        await asyncio.sleep(self.poll_interval) # Use self.poll_interval
+                    except asyncio.CancelledError:
+                        break
 
+            except asyncio.CancelledError:
+                break
             except Exception:
                 logger.exception("Async worker error")
-                await asyncio.sleep(poll_interval)
+                if self.running: # Only sleep if still running
+                    try:
+                        await asyncio.sleep(self.poll_interval)
+                    except asyncio.CancelledError:
+                        break
 
     def stop(self):
         """Stop the worker"""
         self.running = False
         logger.debug("Stopping asynchronous worker for queue %s", self.queue_name)
+        if self._task:
+            self._task.cancel()

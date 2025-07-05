@@ -8,6 +8,7 @@ from conftest import ASYNC_DATABASE_URL, SYNC_DATABASE_URL, TEST_TABLE_NAME
 from sqlalchemy import delete
 
 from pgque import AsyncMessageQueue, MessageQueue
+from pgque.workers import AsyncMessageWorker, MessageWorker
 
 
 async def async_cleanup_sync_queue(queue: MessageQueue):
@@ -189,3 +190,183 @@ async def test_async_delay_message(async_queue: AsyncMessageQueue):
     message = await async_queue.receive_message(queue_name)
     assert message is not None
     assert message["payload"] == payload
+
+
+def test_worker_process_message(sync_queue: MessageQueue):
+    queue_name = "test_worker_process"
+    payload = {"data": "worker_task"}
+    sync_queue.send_message(queue_name, payload)
+
+    processed_payloads = []
+
+    def handler(current_payload):
+        processed_payloads.append(current_payload)
+        return True  # Indicate successful processing
+
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    # Run the worker for a short period to allow it to process the message
+    worker.start() # No args
+    time.sleep(0.5)
+    worker.stop()
+
+    assert len(processed_payloads) == 1
+    assert processed_payloads[0] == payload
+
+    stats = sync_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 1
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 0
+
+
+def test_worker_fail_message_and_retry(sync_queue: MessageQueue):
+    queue_name = "test_worker_fail_retry"
+    payload = {"data": "worker_fail_task"}
+    sync_queue.send_message(queue_name, payload, max_retries=1)
+
+    processed_count = 0
+
+    def handler(current_payload):
+        nonlocal processed_count
+        processed_count += 1
+        if processed_count == 1:
+            return False  # Simulate failure
+        return True  # Succeed on retry
+
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    worker.start() # No args
+    time.sleep(2.5)  # Allow for initial failure and retry
+    worker.stop()
+
+    assert processed_count == 2  # Initial attempt + 1 retry
+
+    stats = sync_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 1
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 0
+
+
+def test_worker_dead_letter(sync_queue: MessageQueue):
+    queue_name = "test_worker_dead_letter"
+    payload = {"data": "worker_dlq_task"}
+    sync_queue.send_message(queue_name, payload, max_retries=0) # No retries
+
+    processed_count = 0
+
+    def handler(current_payload):
+        nonlocal processed_count
+        processed_count += 1
+        return False  # Always fail
+
+    worker = MessageWorker(sync_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    worker.start() # No args
+    time.sleep(0.5) # Allow for processing and immediate DLQ
+    worker.stop()
+
+    assert processed_count == 1
+
+    stats = sync_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 0
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 1
+
+
+@pytest.mark.asyncio
+async def test_async_worker_process_message(async_queue: AsyncMessageQueue):
+    queue_name = "test_async_worker_process"
+    payload = {"data": "async_worker_task"}
+    await async_queue.send_message(queue_name, payload)
+
+    processed_payloads = []
+
+    async def handler(current_payload):
+        processed_payloads.append(current_payload)
+        return True  # Indicate successful processing
+
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    # Run the worker for a short period to allow it to process the message
+    task = worker.start() # No args
+    await asyncio.sleep(0.5)
+    worker.stop()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert len(processed_payloads) == 1
+    assert processed_payloads[0] == payload
+
+    stats = await async_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 1
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 0
+
+
+@pytest.mark.asyncio
+async def test_async_worker_fail_message_and_retry(async_queue: AsyncMessageQueue):
+    queue_name = "test_async_worker_fail_retry"
+    payload = {"data": "async_worker_fail_task"}
+    await async_queue.send_message(queue_name, payload, max_retries=1)
+
+    processed_count = 0
+
+    async def handler(current_payload):
+        nonlocal processed_count
+        processed_count += 1
+        if processed_count == 1:
+            return False  # Simulate failure
+        return True  # Succeed on retry
+
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    task = worker.start() # No args
+    await asyncio.sleep(2.5)  # Allow for initial failure and retry
+    worker.stop()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert processed_count == 2  # Initial attempt + 1 retry
+
+    stats = await async_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 1
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 0
+
+
+@pytest.mark.asyncio
+async def test_async_worker_dead_letter(async_queue: AsyncMessageQueue):
+    queue_name = "test_async_worker_dead_letter"
+    payload = {"data": "async_worker_dlq_task"}
+    await async_queue.send_message(queue_name, payload, max_retries=0) # No retries
+
+    processed_count = 0
+
+    async def handler(current_payload):
+        nonlocal processed_count
+        processed_count += 1
+        return False  # Always fail
+
+    worker = AsyncMessageWorker(async_queue, queue_name, handler, poll_interval=0.1) # poll_interval in constructor
+
+    task = worker.start() # No args
+    await asyncio.sleep(0.5) # Allow for processing and immediate DLQ
+    worker.stop()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert processed_count == 1
+
+    stats = await async_queue.get_queue_stats(queue_name)
+    assert stats["completed"] == 0
+    assert stats["pending"] == 0
+    assert stats["dead_letter"] == 1
